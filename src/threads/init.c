@@ -85,7 +85,7 @@ main (void)
   argv = read_command_line ();
   argv = parse_options (argv);
 
-  /* Initialize ourselves as a thread so we can use locks,
+  /* Initialize ourselves as a thread slocks,
      then enable console locking. */
   thread_init ();
   console_init ();  

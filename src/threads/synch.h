@@ -2,7 +2,9 @@
 #define THREADS_SYNCH_H
 
 #include <list.h>
+#include "../devices/timer.h"
 #include <stdbool.h>
+#include "thread.h"
 
 /* A counting semaphore. */
 struct semaphore 
@@ -17,18 +19,25 @@ bool sema_try_down (struct semaphore *);
 void sema_up (struct semaphore *);
 void sema_self_test (void);
 
+bool less_sema(const struct list_elem *, const struct list_elem *, void *);
+
 /* Lock. */
 struct lock 
   {
     struct thread *holder;      /* Thread holding lock (for debugging). */
     struct semaphore semaphore; /* Binary semaphore controlling access. */
+    int max_priority;
+    struct list_elem pelem;
   };
+#define lock_entry(DATA) ( list_entry(DATA, struct lock, pelem) )
 
 void lock_init (struct lock *);
 void lock_acquire (struct lock *);
 bool lock_try_acquire (struct lock *);
 void lock_release (struct lock *);
 bool lock_held_by_current_thread (const struct lock *);
+void lock_push_up (struct lock*, int);
+void thread_lock_push_up(struct thread*);
 
 /* Condition variable. */
 struct condition 

@@ -86,7 +86,6 @@ static void
 high_thread_func (void *lock_) 
 {
   struct lock *lock = lock_;
-
   lock_acquire (lock);
   msg ("High thread got the lock.");
   lock_release (lock);

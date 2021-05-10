@@ -102,7 +102,7 @@ struct list
 
 /* Converts pointer to list element LIST_ELEM into a pointer to
    the structure that LIST_ELEM is embedded inside.  Supply the
-   name of the outer structure STRUCT and the member name MEMBER
+   name of the outer structure STRUCT and the member name fEMBER
    of the list element.  See the big comment at the top of the
    file for an example. */
 #define list_entry(LIST_ELEM, STRUCT, MEMBER)           \
@@ -158,7 +158,7 @@ bool list_empty (struct list *);
 
 /* Miscellaneous. */
 void list_reverse (struct list *);
-
+
 /* Compares the value of two list elements A and B, given
    auxiliary data AUX.  Returns true if A is less than B, or
    false if A is greater than or equal to B. */

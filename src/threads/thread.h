@@ -3,7 +3,9 @@
 
 #include <debug.h>
 #include <list.h>
+#include <heap.h>
 #include <stdint.h>
+#include "../devices/timer.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -88,10 +90,18 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+    int ori_priority;
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    uint64_t time_blocked;
+
+    struct lock *wait_for_lock;
+    struct list hold_locks;
+    struct list_elem pelem;
+
+    int64_t nice, recent_cpu;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -101,7 +111,7 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
-
+#define thread_entry(DATA) ( list_entry(DATA, struct thread, pelem) );
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
@@ -125,6 +135,7 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
+void thread_try_yield(void);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
@@ -132,10 +143,14 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+void update_ready_priority(struct thread *, int);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
+void thread_update_load_avg(void);
+void thread_update_recent_cpu(struct thread *, void *);
+void thread_adjust_priority(struct thread *, void *);
 #endif /* threads/thread.h */

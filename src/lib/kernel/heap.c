@@ -135,11 +135,13 @@ void heap_push (struct heap *heap, struct heap_elem *elem){
 }
 
 void heap_adjust (struct heap *heap, struct heap_elem *elem){
-    assert(heap && elem);
-    if(elem->pa)
-        assert(elem == elem->pa->lc || elem == elem->pa->rc);
-    else 
-        assert(elem == heap->root);
+    ASSERT(heap && elem);
+    if(elem->pa){
+        ASSERT(elem == elem->pa->lc || elem == elem->pa->rc);
+    }
+    else{ 
+        ASSERT(elem == heap->root);
+    }
 
     if(heap->root == elem){
         heapify(heap);
@@ -161,7 +163,7 @@ void heap_adjust (struct heap *heap, struct heap_elem *elem){
             if(max_elem == elem)
                 return;
             heap_elem_swap(elem, max_elem);
-            assert(heap->root != elem);
+            ASSERT(heap->root != elem);
         }
     }
 }
