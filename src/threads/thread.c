@@ -1,4 +1,4 @@
-#include "threads/thread.h"
+#include "thread.h"
 #include <debug.h>
 #include <stddef.h>
 #include <random.h>
@@ -8,6 +8,7 @@
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
@@ -96,6 +97,7 @@ thread_init (void)
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
+
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
 }
@@ -183,6 +185,7 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  sub_thread_init (t);
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -290,7 +293,31 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
+
+  struct thread *cur = thread_current();
+  list_remove (&cur->allelem);
+
+  /* As child */
+  struct list *root = &cur->exit_notify;
+  struct list_elem *ptr;
+  for(ptr = list_begin(root); ptr != list_end(root); ptr = list_next (ptr)){
+    struct sub_thread *pa_ret = list_entry (ptr, struct sub_thread, wait_elem);
+    pa_ret->exit_code = cur->exit_status;
+    sema_up (&pa_ret->sema_exit);
+  }
+
+  /* As parent*/
+  root = &cur->subs_list;
+  while (!list_empty(root)){
+    struct sub_thread *head = list_entry (list_pop_front(root), struct sub_thread, ch_elem);
+    free (head);
+  }
+
+  /* Close opened file */
+  if(cur->hold_file)
+    file_close (cur->hold_file);
+
+
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -463,6 +490,15 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  t->exit_status = -1;
+  t->fd_cnt = INITIAL_FD;
+  t->hold_file = NULL;
+  
+  /* For exit notification*/
+  lock_init (&t->exit_lock);
+  list_init (&t->exit_notify);
+  list_init (&t->subs_list);
+  list_init (&t->files_list);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -578,7 +614,53 @@ allocate_tid (void)
 
   return tid;
 }
-
+
+
+// void thread_add_notify(struct thread *t, struct thread_return *exit_agent){
+  
+//   struct list *exit_not = &t->exit_notify;
+//   lock_acquire (&t->exit_lock);
+//   list_push_back (exit_not, &exit_agent->elem);
+//   lock_release (&t->exit_lock);
+
+// }
+
+// void thread_remove_notify(struct thread *t, struct thread_return *exit_agent){
+//   struct list *exit_not = &t->exit_notify;
+//   lock_acquire (&t->exit_lock);
+//   list_remove (&exit_agent->elem);
+//   lock_release (&t->exit_lock);
+// }
+
+struct sub_thread* is_subthread(struct thread *pa, tid_t child_tid){
+  struct list *root = &pa->subs_list;
+  struct list_elem *ptr;
+
+  for(ptr = list_begin(root); ptr != list_end(root); ptr = list_next(ptr)){
+    struct sub_thread *sub_t = list_entry(ptr, struct sub_thread, ch_elem );
+    if( sub_t->tid == child_tid){
+      return sub_t;
+    }
+  }
+  return NULL;
+}
+
+
+void sub_thread_init (struct thread *child){
+  struct thread *cur = running_thread();
+  struct sub_thread *sub = calloc (1, sizeof(struct sub_thread));
+
+  sema_init (&sub->sema_exit, 0);
+  sema_init (&sub->load_done, 0);
+  sub->load_success = false;
+  sub->exit_code = -1;
+  sub->tid = child->tid;
+  sub->child = child;
+  
+  list_push_back (&cur->subs_list, &sub->ch_elem);
+  list_push_back (&child->exit_notify, &sub->wait_elem);
+}
+
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);

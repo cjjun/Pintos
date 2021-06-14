@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -23,7 +24,19 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+#define INITIAL_FD 5
 
+struct sub_thread{
+   struct semaphore sema_exit;          /* If sub-thread has exited*/
+   struct semaphore load_done;          /* If sub-thread has been loaded*/
+   bool load_success;                   /* If sub-thread has been successfully loaded*/
+   int exit_code;                       /* exit code of sub-thread*/
+   int tid;                             /* tid of sub-thread*/
+
+   struct thread *child;                /* pointer to sub-thread. It might be invalid when child exited*/
+   struct list_elem ch_elem;            /* index sub-thread*/
+   struct list_elem wait_elem;          /* index for child use*/
+};
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -93,6 +106,18 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+   /* Mange sub-thread*/
+    struct list subs_list;
+    /* Notify all when thread exit */
+    struct list exit_notify;
+    struct lock exit_lock;
+    int exit_status;
+
+    /* File manage */
+    struct list files_list;
+    int fd_cnt;
+    void *hold_file;
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -109,6 +134,7 @@ extern bool thread_mlfqs;
 
 void thread_init (void);
 void thread_start (void);
+void sub_thread_init (struct thread *);
 
 void thread_tick (void);
 void thread_print_stats (void);
@@ -137,5 +163,9 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+// void thread_add_notify(struct thread *, struct thread_return *);
+// void thread_remove_notify(struct thread *, struct thread_return *);
+struct sub_thread * is_subthread(struct thread *, tid_t);
 
 #endif /* threads/thread.h */

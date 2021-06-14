@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -17,9 +18,12 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
+void push_args(void **, char *);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -30,7 +34,6 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
-
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
@@ -40,9 +43,17 @@ process_execute (const char *file_name)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
-  return tid;
+  
+  struct sub_thread *sub = is_subthread (thread_current(), tid);
+  sema_down (&sub->load_done);
+ 
+  if (sub->load_success)
+    return tid;
+  else 
+    return -1;
 }
 
 /* A thread function that loads a user process and starts it
@@ -59,13 +70,31 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
+  char *ptr = NULL, old;
+  for(ptr = file_name; *ptr != ' ' && *ptr != 0; ptr++);
+  ASSERT(  *ptr == ' ' || *ptr == 0);
+  old = *ptr;
+  *ptr = 0;
+
+  acquire_filesys_lock ();
   success = load (file_name, &if_.eip, &if_.esp);
+  release_filesys_lock ();
 
-  /* If load failed, quit. */
+  struct thread *cur = thread_current();
+  struct sub_thread *pa= list_entry(list_begin (&cur->exit_notify), struct sub_thread, wait_elem );
+  pa->load_success = success;
+  sema_up (&pa->load_done);
+
+  if(success){
+    *ptr = old;
+    push_args( &if_.esp, file_name);
+  }
   palloc_free_page (file_name);
+  /* If load failed, quit. */
   if (!success) 
-    thread_exit ();
-
+    system_exit (-1);
+  
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -87,8 +116,20 @@ start_process (void *file_name_)
    does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) 
-{
-  return -1;
+{ 
+  if (child_tid == -1){
+    return -1;
+  }
+  struct sub_thread *sub = is_subthread (thread_current(), child_tid);
+  if(sub == NULL)
+    return -1;
+
+  sema_down (&sub->sema_exit);
+  int ret = sub->exit_code;
+  list_remove (&sub->ch_elem);
+  free (sub);
+  
+  return ret;
 }
 
 /* Free the current process's resources. */
@@ -228,6 +269,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
+  file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -312,7 +354,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  // file_close (file);
+  thread_current()->hold_file = file;
   return success;
 }
 
@@ -437,7 +480,7 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
+        *esp = PHYS_BASE - 12;
       else
         palloc_free_page (kpage);
     }
@@ -462,4 +505,53 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+void push_args(void **esp, char *s){
+    int len = 0;
+    void *ptr = *esp;
+    for(int i = 0; s[i]; ++i){
+        if(i > 0 && s[i] == ' ' && s[i-1] == ' '){
+            continue;
+        }
+        len++;
+    }
+    char *sta[30];
+    int top = 0, dev = 0;
+
+    ptr = (char *)ptr - len - 1;
+    sta[top++] = (char *)ptr;
+
+    for(int i = 0; s[i]; ++i){
+        if(i > 0 && s[i] == ' ' && s[i-1] == ' '){
+            continue;
+        }
+        if(s[i] == ' '){
+            ((char *)ptr)[dev] = 0;
+        }
+        else{
+            ((char *)ptr)[dev] = s[i];
+        }
+        if(dev > 0 && ((char *)ptr)[dev-1] == 0){
+            sta[top++] = (char *)ptr + dev;
+        }
+        dev++;
+    }
+
+    ptr = (void *)((unsigned int)ptr & 0xfffffff0);
+    ptr = (char **)ptr - top - 1;
+    for(int i = 0; i < top; ++i)
+        ((char **)ptr)[i] = sta[i];
+    ((char **)ptr)[top] = 0;
+
+    char *tmp = (char *)ptr;
+    ptr = (char **)ptr - 1;
+    *(char **)ptr = tmp;
+
+    ptr = (int *)ptr - 1;
+    *(int *)ptr = top; 
+
+    ptr = (int **)ptr - 1;
+    *(int **)ptr = 0;
+    *esp = ptr;
 }
