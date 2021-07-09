@@ -338,6 +338,7 @@ thread_yield (void)
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
+  // printf("%s\n", cur->name);
   intr_set_level (old_level);
 }
 
@@ -493,12 +494,15 @@ init_thread (struct thread *t, const char *name, int priority)
   t->exit_status = -1;
   t->fd_cnt = INITIAL_FD;
   t->hold_file = NULL;
+  t->mmap_cnt = 1;
+  t->intr_esp = NULL;
   
   /* For exit notification*/
   lock_init (&t->exit_lock);
   list_init (&t->exit_notify);
   list_init (&t->subs_list);
   list_init (&t->files_list);
+  list_init (&t->mmap_list);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

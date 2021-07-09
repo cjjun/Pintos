@@ -118,6 +118,14 @@ struct thread
     int fd_cnt;
     void *hold_file;
 
+    /* Mmap manage */
+    struct list mmap_list;
+    int mmap_cnt;
+
+    /* Record esp when the first interrupt happens*/
+    void *intr_esp;
+
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */

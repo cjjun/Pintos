@@ -31,6 +31,9 @@
 #else
 #include "tests/threads/tests.h"
 #endif
+#include "vm/swap.h"
+#include "vm/page.h"
+#include "vm/frame.h"
 #ifdef FILESYS
 #include "devices/block.h"
 #include "devices/ide.h"
@@ -98,7 +101,8 @@ main (void)
   palloc_init (user_page_limit);
   malloc_init ();
   paging_init ();
-
+  init_hash_spt ();
+  init_frame_table ();
   /* Segmentation. */
 #ifdef USERPROG
   tss_init ();
@@ -127,6 +131,7 @@ main (void)
   filesys_init (format_filesys);
 #endif
 
+  swap_init ();
   printf ("Boot complete.\n");
   
   /* Run actions specified on kernel command line. */

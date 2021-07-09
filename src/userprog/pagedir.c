@@ -1,10 +1,12 @@
 #include "userprog/pagedir.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "vm/page.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
@@ -38,10 +40,14 @@ pagedir_destroy (uint32_t *pd)
       {
         uint32_t *pt = pde_get_pt (*pde);
         uint32_t *pte;
-        
+      
+        // for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
+        //   if (*pte & PTE_P) 
+        //     palloc_free_page (pte_get_page (*pte));
+        // palloc_free_page (pt);
         for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P) 
-            palloc_free_page (pte_get_page (*pte));
+          if (*pte & PTE_V) 
+            page_virtual_free (pte);
         palloc_free_page (pt);
       }
   palloc_free_page (pd);
@@ -118,6 +124,122 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
     return false;
 }
 
+/* Adds a virtual mapping in page directory PD for user virtual page
+   UPAGE. The page is marked valid but not present, so when MMU calls
+   it, page fault takes place, and based on valid, the OS will check 
+   if it's not yet assigned or assigned but swapped out in SWAP.
+   UPAGE must not already be mapped. 
+   Physical address is initialized as 0.
+   If WRITABLE is true, the new page is read/write;
+   otherwise it is read-only.
+   Returns *pte if successful, NULL if memory allocation
+   failed. */
+uint32_t *
+pagedir_set_virtual_page (uint32_t *pd, void *upage, bool writable) 
+{
+  uint32_t *pte;
+
+  ASSERT (pg_ofs (upage) == 0);
+  ASSERT (is_user_vaddr (upage));
+  ASSERT (pd != init_page_dir);
+
+  pte = lookup_page (pd, upage, true);
+
+  if (pte != NULL) 
+    {
+      ASSERT ((*pte & PTE_P) == 0);
+      *pte = PTE_U | (writable ? PTE_W : 0) | PTE_V;
+    }
+  return pte;
+}
+
+void
+pte_set_swap (uint32_t *pte, bool swap) 
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  *pte = swap? (*pte | PTE_S): (*pte & (~PTE_S) );
+}
+
+void
+pte_set_mmap (uint32_t *pte, bool mmap) 
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  *pte = mmap? (*pte | PTE_M): (*pte & (~PTE_M) );
+}
+
+void 
+pte_install_frame (uint32_t *pte, void *kpage) 
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  ASSERT (pg_ofs (kpage) == 0);
+  ASSERT (vtop (kpage) >> PTSHIFT < init_ram_pages);
+
+  *pte = vtop (kpage) | ( *pte & PGMASK );
+  *pte |= PTE_P;
+}
+
+void
+pte_uninstall_frame (uint32_t *pte)
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  *pte &= PGMASK;
+  *pte &= ~PTE_P; 
+}
+
+void
+pte_clear_accessed (uint32_t *pte) 
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  *pte &= ~PTE_A;
+}
+
+void
+pte_clear_dirty (uint32_t *pte) 
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  *pte &= ~PTE_D;
+}
+
+bool 
+pte_is_swapped (uint32_t *pte)
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  return (*pte & PTE_S) > 0;
+}
+
+bool 
+pte_is_mmapped (uint32_t *pte)
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  return (*pte & PTE_M) > 0;
+}
+
+bool 
+pte_is_accessed (uint32_t *pte)
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  return (*pte & PTE_A) > 0;
+}
+
+bool 
+pte_is_dirty (uint32_t *pte)
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  return (*pte & PTE_D) > 0;
+}
+
+bool 
+pte_is_present (uint32_t *pte)
+{
+  ASSERT (pte && (*pte & PTE_V) );
+  return (*pte & PTE_P) > 0;
+}
+
+bool pte_is_valid (uint32_t *pte) {
+  ASSERT (pte);
+  return (*pte & PTE_V) > 0;
+}
+
 /* Looks up the physical address that corresponds to user virtual
    address UADDR in PD.  Returns the kernel virtual address
    corresponding to that physical address, or a null pointer if
@@ -167,6 +289,15 @@ pagedir_is_dirty (uint32_t *pd, const void *vpage)
   return pte != NULL && (*pte & PTE_D) != 0;
 }
 
+/* Returns true if the PTE for virtual page VPAGE in PD is valid, */
+bool 
+pagedir_is_valid (uint32_t *pd, const void *vpage) 
+{
+  uint32_t *pte = lookup_page (pd, vpage, false);
+  return pte != NULL && (*pte & PTE_V) != 0;
+}
+
+
 /* Set the dirty bit to DIRTY in the PTE for virtual page VPAGE
    in PD. */
 void
@@ -212,6 +343,10 @@ pagedir_set_accessed (uint32_t *pd, const void *vpage, bool accessed)
           invalidate_pagedir (pd);
         }
     }
+}
+
+uint32_t *lookup_pte (void *pd, void *uaddr) {
+  return lookup_page (pd, uaddr, false);
 }
 
 /* Loads page directory PD into the CPU's page directory base

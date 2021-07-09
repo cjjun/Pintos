@@ -39,7 +39,6 @@ static struct pool kernel_pool, user_pool;
 static void init_pool (struct pool *, void *base, size_t page_cnt,
                        const char *name);
 static bool page_from_pool (const struct pool *, void *page);
-
 /* Initializes the page allocator.  At most USER_PAGE_LIMIT
    pages are put into the user pool. */
 void
@@ -71,6 +70,7 @@ void *
 palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
 {
   struct pool *pool = flags & PAL_USER ? &user_pool : &kernel_pool;
+  ASSERT ( (flags & PAL_USER) == 0 );
   void *pages;
   size_t page_idx;
 
@@ -130,6 +130,7 @@ palloc_free_multiple (void *pages, size_t page_cnt)
     pool = &user_pool;
   else
     NOT_REACHED ();
+  ASSERT (pool = &kernel_pool);
 
   page_idx = pg_no (pages) - pg_no (pool->base);
 
@@ -162,7 +163,6 @@ init_pool (struct pool *p, void *base, size_t page_cnt, const char *name)
   page_cnt -= bm_pages;
 
   printf ("%zu pages available in %s.\n", page_cnt, name);
-
   /* Initialize the pool. */
   lock_init (&p->lock);
   p->used_map = bitmap_create_in_buf (page_cnt, base, bm_pages * PGSIZE);
@@ -179,4 +179,10 @@ page_from_pool (const struct pool *pool, void *page)
   size_t end_page = start_page + bitmap_size (pool->used_map);
 
   return page_no >= start_page && page_no < end_page;
+}
+
+void init_frame_table_param (uint32_t *frame_nums, uint32_t *base)
+{
+  *frame_nums = bitmap_size (user_pool.used_map);
+  *base = user_pool.base;
 }

@@ -1,13 +1,19 @@
 #include "userprog/syscall.h"
 #include "userprog/process.h"
 #include "userprog/exception.h"
+#include "userprog/pagedir.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <syscall-nr.h>
-#include "threads/thread.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "userprog/process.h"
+#include "userprog/exception.h"
+#include "vm/mmap.h"
+#include "vm/page.h"
 #include "devices/shutdown.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -42,6 +48,8 @@ void sys_write (struct intr_frame * UNUSED);
 void sys_seek(struct intr_frame * UNUSED);
 void sys_tell(struct intr_frame * UNUSED);
 void sys_close(struct intr_frame * UNUSED);
+void sys_mmap(struct intr_frame * UNUSED);
+void sys_munmap(struct intr_frame * UNUSED);
 
 void
 syscall_init (void) 
@@ -60,7 +68,9 @@ syscall_init (void)
   sys_func[SYS_SEEK] = sys_seek;
   sys_func[SYS_TELL] = sys_tell;
   sys_func[SYS_CLOSE] = sys_close;
-
+  sys_func[SYS_MMAP] = sys_mmap;
+  sys_func[SYS_MUNMAP] = sys_munmap;
+  printf("system lock %p\n", &filesys_lock);
   lock_init (&filesys_lock);
 
 }
@@ -71,12 +81,26 @@ syscall_handler (struct intr_frame *f UNUSED)
   int code;
   check_ptr (f->esp);
   mem_scanf(f->esp, &code, sizeof(code));
-
   if(code < 0 || code >= SYS_MAX_CALL){
     system_exit (-1);
   }
-  // printf("---request %d", code);
+
+  /* Record the original esp*/
+  struct thread *cur = thread_current();
+  bool first_visit = false;
+    // printf("---request %d %p\n", code, cur->intr_esp);
+  if ( cur->intr_esp == NULL ) {
+    cur->intr_esp = f->esp;
+    first_visit= true;
+  }
+
+  /* Execute syscall*/
   sys_func[code](f);
+
+  if (first_visit) {
+    thread_current()->intr_esp = NULL;
+  }
+  // printf("---end request %d %p\n", code, cur->intr_esp);
 }
 
 /* Prototype
@@ -138,9 +162,19 @@ system_exit (int exit_code){
      file_close (file_ptr);
   }
 
+  struct list *ret = &cur->mmap_list;
+  while (!list_empty(ret)){
+    struct mmap *mmap_ptr = list_entry (list_pop_front(ret), struct mmap, elem);
+    munmap (mmap_ptr->addr, mmap_ptr->map_length);
+    acquire_filesys_lock ();
+    file_close (mmap_ptr->file);
+    release_filesys_lock ();
+    free (mmap_ptr);
+  }
+
   thread_exit();
 }
-
+ 
 /* Prototype 
 pid_t
 exec (const char *file)
@@ -162,7 +196,6 @@ sys_exec (struct intr_frame *f UNUSED)
   check_ptr (f->esp + 4);
   mem_scanf(f->esp + 4, &file_name, sizeof(file_name));
   check_buffer (file_name, true);
-  // printf("----->%s will exec %s\n", thread_current()->name, file_name);
   f->eax = process_execute(file_name);
 }
 /* Prototype 
@@ -206,9 +239,9 @@ sys_create (struct intr_frame *f UNUSED)
 
   check_buffer (file, true);
 
-  lock_acquire (&filesys_lock);
+  acquire_filesys_lock ();
   f->eax = filesys_create (file, initial_size);
-  lock_release (&filesys_lock);
+  release_filesys_lock ();
 }
 
 /* Prototype 
@@ -231,9 +264,9 @@ sys_remove (struct intr_frame *f UNUSED)
   mem_scanf (f->esp + 4, &file, sizeof(file));
   check_buffer (file, true);
 
-  lock_acquire (&filesys_lock);
+  acquire_filesys_lock ();
   f->eax = filesys_remove (file);
-  lock_release (&filesys_lock);
+  release_filesys_lock ();
 }
 
 /* Prototype 
@@ -257,9 +290,9 @@ sys_open (struct intr_frame *f UNUSED)
 
   check_buffer (file_buffer, true);
 
-  lock_acquire (&filesys_lock);
+  acquire_filesys_lock ();
   struct file *file_ptr = filesys_open (file_buffer);
-  lock_release (&filesys_lock);
+  release_filesys_lock ();
 
   if( file_ptr == NULL){
     f->eax = -1;
@@ -293,9 +326,9 @@ sys_filesize (struct intr_frame *f UNUSED)
   if( file_ptr == NULL )
     system_exit (-1);
 
-  lock_acquire (&filesys_lock);
+  acquire_filesys_lock ();
   f->eax = file_length (file_ptr);
-  lock_release (&filesys_lock);
+  release_filesys_lock ();
 }
 
 /* Prototype 
@@ -322,11 +355,15 @@ sys_read (struct intr_frame *f UNUSED)
   mem_scanf(f->esp + 4, &fd, sizeof(fd));
   mem_scanf(f->esp + 8, &buffer, sizeof(buffer));
   mem_scanf(f->esp + 12, &size, sizeof(size));
-
+  
+  // check_stack (buffer, f->esp);
   check_buffer (buffer, true);
+  check_ptr (buffer);
   if (fd == 0){
-    for(int i = 0; i < size; ++i)
+    acquire_filesys_lock ();
+    for(unsigned i = 0; i < size; ++i)
       buffer[i] = input_getc();
+    release_filesys_lock ();
     buffer[size] = 0;
     f->eax = size;
   } else {
@@ -336,10 +373,11 @@ sys_read (struct intr_frame *f UNUSED)
       return;
     }
 
-    lock_acquire (&filesys_lock);
+    acquire_filesys_lock ();
     f->eax = file_read (file_ptr, buffer, size);
-    lock_release (&filesys_lock);
+    release_filesys_lock ();
   }
+  // printf("ok2\n");
 }
 
 /* 
@@ -365,16 +403,20 @@ sys_write (struct intr_frame *f UNUSED)
   int fd;
   char *buffer;
   unsigned size;
-
+  
   check_ptr (f->esp + 12);
   mem_scanf(f->esp + 4, &fd, sizeof(fd));
   mem_scanf(f->esp + 8, &buffer, sizeof(buffer));
   mem_scanf(f->esp + 12, &size, sizeof(size));
+
+  // check_stack (buffer, f->esp);
   check_buffer (buffer, false);
 
   if( fd == 1 ){
     size = size < 1000? size:1000;
+    acquire_filesys_lock ();
     putbuf(buffer, size);
+    release_filesys_lock ();
     f->eax = size;
   } else {
     struct file *file_ptr = find_by_fd(fd);
@@ -382,9 +424,9 @@ sys_write (struct intr_frame *f UNUSED)
     if (file_ptr == NULL)
       system_exit (-1);
 
-    lock_acquire (&filesys_lock);
+    acquire_filesys_lock ();
     f->eax = file_write (file_ptr, buffer, size);
-    lock_release (&filesys_lock);
+    release_filesys_lock ();
   }
 }
 
@@ -412,6 +454,7 @@ sys_seek (struct intr_frame *f UNUSED)
 
   if (file_ptr == NULL)
     system_exit (-1);
+
   file_seek (file_ptr, position);
 }
 
@@ -436,6 +479,7 @@ sys_tell (struct intr_frame *f UNUSED)
   struct file *file_ptr = find_by_fd(fd);
   if (file_ptr == NULL)
     system_exit (-1);
+
   f->eax = file_tell (file_ptr);
 }
 
@@ -463,10 +507,91 @@ sys_close (struct intr_frame *f UNUSED)
 
   list_remove (&file_ptr->elem);
 
-  lock_acquire (&filesys_lock);
+  acquire_filesys_lock ();
   file_close (file_ptr);
-  lock_release (&filesys_lock);
+  release_filesys_lock ();
 }
+
+/*  Prototype 
+mapid_t
+mmap (int fd, void *addr)
+{
+  return syscall2 (SYS_MMAP, fd, addr);
+}
+*/
+void 
+sys_mmap(struct intr_frame *f UNUSED)
+{
+  int fd;
+  void *addr;
+  check_ptr (f->esp + 8);
+  mem_scanf (f->esp + 4, &fd, sizeof(fd));
+  mem_scanf (f->esp + 8, &addr, sizeof(fd));
+
+  // check_stack (addr, f->esp);
+  
+  struct thread *t = thread_current();
+  struct file *file_ptr = find_by_fd (fd);
+  if (file_ptr == NULL)
+    system_exit (-1);
+  off_t length = file_length (file_ptr);
+
+  acquire_filesys_lock ();
+  file_ptr = file_reopen (file_ptr);
+  release_filesys_lock ();
+
+  if (!mmap (file_ptr, 0, addr, length, !file_ptr->deny_write)) {
+    f->eax = MAP_FAILED;
+    return;
+  } else {
+    struct mmap *mmap = (struct mmap *)malloc( sizeof (struct mmap) );
+    mmap->addr = addr;
+    mmap->file = file_ptr;
+    mmap->mapid = ++t->mmap_cnt;
+    mmap->map_length = length;
+    list_push_back ( &t->mmap_list, &mmap->elem);
+
+    f->eax = mmap->mapid;
+  }
+}
+
+/*  Prototype 
+void
+munmap (mapid_t mapid)
+{
+  syscall1 (SYS_MUNMAP, mapid);
+}
+*/
+void 
+sys_munmap(struct intr_frame *f UNUSED)
+{
+  mapid_t mapid;
+  check_ptr (f->esp + 4);
+  mem_scanf (f->esp + 4, &mapid, sizeof(mapid));
+
+  struct list *root = &thread_current()->mmap_list;
+  struct list_elem *ptr;
+  struct mmap *ret = NULL;
+  for(ptr = list_begin(root); ptr != list_end(root); ptr = list_next(ptr)){
+    struct mmap *mmap = list_entry(ptr, struct mmap, elem);
+    if( mmap->mapid == mapid){
+      ret = mmap;
+      break;
+    }
+  }
+  if (ret) {
+    munmap (ret->addr, ret->map_length);
+    acquire_filesys_lock ();
+    file_close (ret->file);
+    release_filesys_lock ();
+    list_remove (&ret->elem); 
+    free (ret);
+  } else {
+    NOT_REACHED ();
+  }
+
+}
+
 
 void mem_scanf(void *src, void *des, int size){
   /* TODO
@@ -485,9 +610,9 @@ void
 check_ptr (void *uaddr) {
   if ( !is_user_vaddr(uaddr))
     system_exit (-1);
-  if ( !pagedir_get_page (thread_current()->pagedir, uaddr) )
+  if ( !page_is_valid (uaddr) )
     system_exit (-1);
-  if ( !pagedir_get_page (thread_current()->pagedir, uaddr + 3)  )
+  if ( !page_is_valid (uaddr + 3)  )
     system_exit (-1);
 }
 
@@ -506,6 +631,7 @@ struct file * find_by_fd(int fd){
 
   return ret;
 }
+
 
 void check_buffer(char *file_name, bool check_whole) {
   if(file_name == NULL)
@@ -526,55 +652,11 @@ void check_buffer(char *file_name, bool check_whole) {
 }
 
 void acquire_filesys_lock (void ){
-  lock_acquire (&filesys_lock);
+  if ( filesys_lock.holder != thread_current () )
+    lock_acquire (&filesys_lock);;
 }
 
 void release_filesys_lock (void){
-  lock_release (&filesys_lock);
+  if ( filesys_lock.holder == thread_current() )
+   lock_release (&filesys_lock);
 }
-
-
-
-// pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/userprog/bad-read -a bad-read -- -q  -f run bad-read
-// pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/userprog/bad-write -a bad-write -- -q  -f run bad-write
-// pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/userprog/bad-write2 -a bad-write2 -- -q  -f run bad-write2
-// pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/userprog/bad-jump -a bad-jump -- -q  -f run bad-jump
-
-
-// FAIL tests/userprog/exec-once
-// FAIL tests/userprog/exec-arg
-// FAIL tests/userprog/exec-bound
-// pass tests/userprog/exec-bound-2
-// FAIL tests/userprog/exec-bound-3
-// FAIL tests/userprog/exec-multiple
-// pass tests/userprog/exec-missing
-// FAIL tests/userprog/exec-bad-ptr
-// FAIL tests/userprog/wait-simple
-// FAIL tests/userprog/wait-twice
-// FAIL tests/userprog/wait-killed
-// pass tests/userprog/wait-bad-pid
-// FAIL tests/userprog/multi-recurse
-// FAIL tests/userprog/multi-child-fd
-// FAIL tests/userprog/rox-simple
-// FAIL tests/userprog/rox-child
-// FAIL tests/userprog/rox-multichild
-// pass tests/userprog/bad-read
-// pass tests/userprog/bad-write
-// pass tests/userprog/bad-read2
-// pass tests/userprog/bad-write2
-// pass tests/userprog/bad-jump
-// pass tests/userprog/bad-jump2
-// FAIL tests/userprog/no-vm/multi-oom
-// pass tests/filesys/base/lg-create
-// pass tests/filesys/base/lg-full
-// FAIL tests/filesys/base/lg-random
-// pass tests/filesys/base/lg-seq-block
-// pass tests/filesys/base/lg-seq-random
-// pass tests/filesys/base/sm-create
-// pass tests/filesys/base/sm-full
-// FAIL tests/filesys/base/sm-random
-// pass tests/filesys/base/sm-seq-block
-// pass tests/filesys/base/sm-seq-random
-// pass tests/filesys/base/syn-read
-// FAIL tests/filesys/base/syn-remove
-// FAIL tests/filesys/base/syn-write

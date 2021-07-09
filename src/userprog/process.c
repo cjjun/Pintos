@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/process.h"
 #include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
@@ -18,7 +19,11 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #include "threads/synch.h"
+#include "vm/page.h"
+#include "vm/mmap.h"
+
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -85,16 +90,17 @@ start_process (void *file_name_)
   struct sub_thread *pa= list_entry(list_begin (&cur->exit_notify), struct sub_thread, wait_elem );
   pa->load_success = success;
   sema_up (&pa->load_done);
-
+  
   if(success){
     *ptr = old;
+    page_absent_action (PHYS_BASE - PGSIZE);
     push_args( &if_.esp, file_name);
   }
   palloc_free_page (file_name);
   /* If load failed, quit. */
   if (!success) 
     system_exit (-1);
-  
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -327,15 +333,19 @@ load (const char *file_name, void (**eip) (void), void **esp)
                                 - read_bytes);
                 }
               else 
-                {
+                { 
                   /* Entirely zero.
                      Don't read anything from disk. */
                   read_bytes = 0;
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
-              if (!load_segment (file, file_page, (void *) mem_page,
-                                 read_bytes, zero_bytes, writable))
+              // printf("loading %s-----%d %d offset %p\n",file_name,read_bytes, zero_bytes, mem_page);
+              if ( !load_seg_mmap (file, file_page, (void *)mem_page, read_bytes, zero_bytes, writable))
                 goto done;
+              // page_absent_action (mem_page);
+              // if (!load_segment (file, file_page, (void *) mem_page,
+              //                    read_bytes, zero_bytes, writable))
+              //   goto done;
             }
           else
             goto done;
@@ -356,6 +366,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* We arrive here whether the load is successful or not. */
   // file_close (file);
   thread_current()->hold_file = file;
+
   return success;
 }
 
@@ -472,19 +483,26 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
-  uint8_t *kpage;
-  bool success = false;
+  // uint8_t *kpage;
+  // bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE - 12;
-      else
-        palloc_free_page (kpage);
-    }
-  return success;
+  // kpage = palloc_get_page (PAL_USER | PAL_ZERO) + 4096 * 5;
+  // if (kpage != NULL) 
+  //   {
+  //     success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  //     if (success)
+  //       *esp = PHYS_BASE - 12;
+  //     else
+  //       palloc_free_page (kpage);
+  //   }
+  // return success;
+  for(int i = 1; i <= MAX_STACK_PAGES; i++)
+    if ( !get_virtual_page (((uint8_t *) PHYS_BASE) - i * PGSIZE, true) ) 
+      return false;
+    
+  *esp = PHYS_BASE - 12;
+  return true;
+
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
