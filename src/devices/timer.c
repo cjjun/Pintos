@@ -3,10 +3,12 @@
 #include <inttypes.h>
 #include <round.h>
 #include <stdio.h>
+#include <stddef.h>
 #include "devices/pit.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "heap.h"
   
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -24,6 +26,23 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+/* Semaphore for re-writing timer_sleep */
+/* One timer with semaphore and ticks in a list. */
+struct timer_elem 
+{
+  struct list_elem elem;              /* List element. */
+  struct semaphore semaphore;         /* This semaphore. */
+  int64_t ddl;
+};
+
+struct list timer_list;
+
+#define timer_entry(DATA) (list_entry(DATA, struct timer_elem, elem) )
+
+static bool less_timer(const struct list_elem *a, const struct list_elem *b, void *aux){
+    return timer_entry(a)->ddl < timer_entry(b)->ddl;
+}
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
@@ -37,6 +56,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&timer_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -92,8 +112,23 @@ timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
+  /* Override this part
   while (timer_elapsed (start) < ticks) 
     thread_yield ();
+  */
+
+ /* Never touch this thread until tick condition satisfies.
+  This is implemented with semaphore */
+
+  struct timer_elem timer;
+  sema_init(&timer.semaphore, 0);
+  timer.ddl = start + ticks;
+
+  enum intr_level old_level = intr_disable ();
+  list_insert_ordered(&timer_list, &timer.elem, less_timer, NULL);
+  intr_set_level(old_level);
+
+  sema_down(&timer.semaphore);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -122,7 +157,6 @@ timer_nsleep (int64_t ns)
 
 /* Busy-waits for approximately MS milliseconds.  Interrupts need
    not be turned on.
-
    Busy waiting wastes CPU cycles, and busy waiting with
    interrupts off for the interval between timer ticks or longer
    will cause timer ticks to be lost.  Thus, use timer_msleep()
@@ -135,7 +169,6 @@ timer_mdelay (int64_t ms)
 
 /* Sleeps for approximately US microseconds.  Interrupts need not
    be turned on.
-
    Busy waiting wastes CPU cycles, and busy waiting with
    interrupts off for the interval between timer ticks or longer
    will cause timer ticks to be lost.  Thus, use timer_usleep()
@@ -148,7 +181,6 @@ timer_udelay (int64_t us)
 
 /* Sleeps execution for approximately NS nanoseconds.  Interrupts
    need not be turned on.
-
    Busy waiting wastes CPU cycles, and busy waiting with
    interrupts off for the interval between timer ticks or longer
    will cause timer ticks to be lost.  Thus, use timer_nsleep()
@@ -171,7 +203,16 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+
+  while(!list_empty(&timer_list) && timer_entry(list_front (&timer_list))->ddl <= timer_ticks ()){
+    enum intr_level old_level = intr_disable ();
+    struct timer_elem *timer = timer_entry( list_pop_front(&timer_list) );
+    intr_set_level(old_level);
+
+    sema_up (&timer->semaphore);
+  }
   thread_tick ();
+
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
@@ -195,7 +236,6 @@ too_many_loops (unsigned loops)
 
 /* Iterates through a simple loop LOOPS times, for implementing
    brief delays.
-
    Marked NO_INLINE because code alignment can significantly
    affect timings, so that if this function was inlined
    differently in different places the results would be difficult

@@ -6,6 +6,7 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "filesys/cache.h"
 
 /* Partition that contains the file system. */
 struct block *fs_device;
@@ -94,10 +95,15 @@ filesys_remove (const char *name)
 static void
 do_format (void)
 {
+  printf("Initializing filesys swap...");
+  block_buffer_init (64);
+  printf ("done.\n");
+
   printf ("Formatting file system...");
   free_map_create ();
   if (!dir_create (ROOT_DIR_SECTOR, 16))
     PANIC ("root directory creation failed");
   free_map_close ();
   printf ("done.\n");
+  
 }

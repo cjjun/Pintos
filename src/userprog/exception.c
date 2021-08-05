@@ -176,7 +176,7 @@ page_fault (struct intr_frame *f)
       else {
          // printf("-----%p %p %p\n", fault_addr, f->esp, thread_current()->intr_esp);
          check_stack (fault_addr, cur->intr_esp);
-         pin_frame ( f->esp, f->cs + f->eip );
+         pin_frame ( f->esp, (f->cs << 4)+ f->eip );
          page_absent_action (page_addr);
          if (first_visit) {
             cur->intr_esp = NULL;

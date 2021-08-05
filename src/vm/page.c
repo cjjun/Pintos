@@ -15,21 +15,21 @@
 struct hash hash_page_table;
 
 #define ll long long
-const int mod = 1000000007;
+static const int mod = 1000000007;
 /* Guard for hash_page_table */
 struct lock lock;
 
 /*
     Define important hash table functions
 */
-unsigned hash_func (const struct hash_elem *e, void *aux) {
+static unsigned hash_func (const struct hash_elem *e, void *aux) {
     struct sup_page_table *table = hash_entry(e, struct sup_page_table, elem);
     ll code = (ll)table->pte % mod;
 
     return (unsigned)code;
 }
 
-bool less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux) {
+static bool less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux) {
     struct sup_page_table *t1 = hash_entry(a, struct sup_page_table, elem);
     struct sup_page_table *t2 = hash_entry(b, struct sup_page_table, elem);
 

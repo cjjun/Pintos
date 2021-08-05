@@ -51,6 +51,12 @@ void sys_close(struct intr_frame * UNUSED);
 void sys_mmap(struct intr_frame * UNUSED);
 void sys_munmap(struct intr_frame * UNUSED);
 
+void sys_chdir(struct intr_frame * UNUSED);
+void sys_mkdir(struct intr_frame * UNUSED);
+void sys_readdir(struct intr_frame * UNUSED);
+void sys_isdir(struct intr_frame * UNUSED);
+void sys_inumber(struct intr_frame * UNUSED);
+
 void
 syscall_init (void) 
 {
@@ -70,7 +76,13 @@ syscall_init (void)
   sys_func[SYS_CLOSE] = sys_close;
   sys_func[SYS_MMAP] = sys_mmap;
   sys_func[SYS_MUNMAP] = sys_munmap;
-  printf("system lock %p\n", &filesys_lock);
+
+  sys_func[SYS_CHDIR] = sys_chdir;
+  sys_func[SYS_MKDIR] = sys_mkdir;
+  sys_func[SYS_READDIR] = sys_readdir;
+  sys_func[SYS_ISDIR] = sys_isdir;
+  sys_func[SYS_INUMBER] = sys_inumber;
+
   lock_init (&filesys_lock);
 
 }
@@ -590,6 +602,79 @@ sys_munmap(struct intr_frame *f UNUSED)
     NOT_REACHED ();
   }
 
+}
+
+/* Prototype
+bool
+chdir (const char *dir)
+{
+  return syscall1 (SYS_CHDIR, dir);
+}
+*/
+void 
+sys_chdir(struct intr_frame *f UNUSED) 
+{
+  char *dir;
+  check_ptr (f->esp + 4);
+  mem_scanf (f->esp + 4, &dir, sizeof(dir));
+}
+
+/* Prototype
+bool
+mkdir (const char *dir)
+{
+  return syscall1 (SYS_MKDIR, dir);
+} */
+void 
+sys_mkdir(struct intr_frame *f UNUSED) 
+{
+  char *dir;
+  check_ptr (f->esp + 4);
+  mem_scanf (f->esp + 4, &dir, sizeof(dir));
+}
+
+/* Prototype
+bool
+readdir (int fd, char name[READDIR_MAX_LEN + 1]) 
+{
+  return syscall2 (SYS_READDIR, fd, name);
+} */
+void 
+sys_readdir(struct intr_frame *f UNUSED) 
+{
+  int fd;
+  char *name;
+  check_ptr (f->esp + 8);
+  mem_scanf (f->esp + 4, &fd, sizeof(fd));
+  mem_scanf (f->esp + 8, &name, sizeof(name));
+}
+
+/* Prototype
+bool
+isdir (int fd) 
+{
+  return syscall1 (SYS_ISDIR, fd);
+} */
+void
+sys_isdir(struct intr_frame *f UNUSED) 
+{
+  int fd;
+  check_ptr (f->esp + 4);
+  mem_scanf (f->esp + 4, &fd, sizeof(fd));
+}
+
+/* Prototype
+int
+inumber (int fd) 
+{
+  return syscall1 (SYS_INUMBER, fd);
+} */
+void
+sys_inumber(struct intr_frame *f UNUSED) 
+{
+  int fd;
+  check_ptr (f->esp + 4);
+  mem_scanf (f->esp + 4, &fd, sizeof(fd));
 }
 
 
