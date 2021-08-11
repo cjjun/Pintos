@@ -79,7 +79,7 @@ void block_buffer_init (uint32_t buffer_size)
     }
 
     /* Initialize autosaver*/
-    thread_create ("Backup", PRI_DEFAULT, backup, (void *)50);
+    // thread_create ("Backup", PRI_DEFAULT, backup, (void *)50);
 }
 
 struct buffer_cache *query_and_update (block_sector_t sector)
@@ -214,25 +214,31 @@ void block_buffer_write (block_sector_t sector, void *buffer)
     lock_release (&cache->lock);
 }
 
+void cache_save (void)
+{
+    lock_acquire (&table_lock);
+    struct list_elem *it;
+    for (it = list_begin (&sector_list); it != list_end (&sector_list); it = list_next (it)) {
+        struct buffer_cache *target = list_entry (it, struct buffer_cache, lelem);
+        if (target->dirty) {
+            // printf("Save sector %d\n", target->sector);
+            block_write (fs_device, target->sector, target->cache);
+            if (lock_try_acquire (&target->lock) ) {
+                if (target->AW == 0) {
+                    target->dirty = false;
+                }
+                lock_release (&target->lock);
+            }
+        }
+    }
+    lock_release (&table_lock);
+}
+
 void backup (void *aux) 
 {
     uint32_t ticks = (uint32_t)aux;
     while (true) {
         timer_sleep (ticks);
-        lock_acquire (&table_lock);
-        struct list_elem *it;
-        for (it = list_begin (&sector_list); it != list_end (&sector_list); it = list_next (it)) {
-            struct buffer_cache *target = list_entry (it, struct buffer_cache, lelem);
-            if (target->dirty) {
-                block_write (fs_device, target->sector, target->cache);
-                if (lock_try_acquire (&target->lock) ) {
-                    if (target->AW == 0) {
-                        target->dirty = false;
-                    }
-                    lock_release (&target->lock);
-                }
-            }
-        }
-        lock_release (&table_lock);
+        cache_save ();
     }
 }

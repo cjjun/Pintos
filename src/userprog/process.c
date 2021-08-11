@@ -161,6 +161,13 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  
+  /* Close opened file */
+  if(cur->hold_file)
+    file_close (cur->hold_file);
+    
+  /* Close pwd pointer*/
+  dir_close ( thread_current ()->dir );
 }
 
 /* Sets up the CPU for running user code in the current

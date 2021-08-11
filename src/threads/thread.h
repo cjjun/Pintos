@@ -121,7 +121,8 @@ struct thread
     /* Mmap manage */
     struct list mmap_list;
     int mmap_cnt;
-
+    /* Current directory */
+    struct dir *dir;
     /* Record esp when the first interrupt happens*/
     void *intr_esp;
 

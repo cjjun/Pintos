@@ -12,6 +12,8 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "filesys/directory.h"
+// #include "filesys.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -313,11 +315,6 @@ thread_exit (void)
     free (head);
   }
 
-  /* Close opened file */
-  if(cur->hold_file)
-    file_close (cur->hold_file);
-
-
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -495,6 +492,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->fd_cnt = INITIAL_FD;
   t->hold_file = NULL;
   t->mmap_cnt = 1;
+
+  if (t != running_thread () && thread_current ()->dir) 
+    t->dir = dir_reopen( thread_current ()->dir );
+
   t->intr_esp = NULL;
   
   /* For exit notification*/

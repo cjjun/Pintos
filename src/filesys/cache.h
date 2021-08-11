@@ -8,6 +8,6 @@
 void block_buffer_init (uint32_t buffer_size);
 void block_buffer_read (block_sector_t sector, void *buffer);
 void block_buffer_write (block_sector_t sector, void *buffer);
-void auto_save (void);
+void cache_save (void);
 
 #endif /* filesys/cache.h */

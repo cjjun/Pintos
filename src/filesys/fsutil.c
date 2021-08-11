@@ -7,6 +7,9 @@
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+#include "filesys/free-map.h"
+#include "filesys/inode.h"
+#include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/vaddr.h"
@@ -221,3 +224,255 @@ fsutil_append (char **argv)
   file_close (src);
   free (buffer);
 }
+
+bool 
+fsutil_chdir (const char *dir_name)
+{
+  if (!dir_name[0])
+    return false;
+
+  int len = strlen (dir_name);
+  char *dir = malloc ( (len + 1) * sizeof (char) );
+
+  for (int i = 0; dir_name[i]; i++)
+    dir[i] = dir_name[i];
+  dir[len] = '\0';
+
+  struct dir *old = thread_current () -> dir, *cur = NULL;
+  // printf("chdir to %s, sector %d\n", dir, inode_get_inumber (dir_get_inode(old) ));
+  struct inode *dir_node;
+  bool fail = false;
+  off_t off = 0;
+  if (dir[0] == '/') {
+    cur = dir_open_root ();
+    off = 1;
+    if (dir[1] == '/')
+      off++;
+  }
+  else {
+    if (dir[0] == '.') {
+      if (dir[1] == '.') {
+        if (dir_lookup (old, "..", &dir_node)) {
+          off = 2;
+          cur = dir_open (dir_node);
+        }
+        else 
+          fail = true;
+      }
+      else {
+        if (dir[off] && dir[off] != '/')
+          fail = true;
+      }
+    }
+    else {
+      
+      cur = dir_reopen(old);
+    }
+  }
+
+  int end;
+  while (!fail && dir[off]) {
+    for (end = off; dir[end]; end++)
+      if (dir[end] == '/')
+        break;
+    bool isdash = dir[end] == '/';
+    dir[end] = 0;
+
+    bool exist = dir_lookup (cur, &dir[off] , &dir_node);
+
+    if (cur) {
+      dir_close (cur);
+      cur = NULL;
+    }
+    if (isdash)
+      dir[end] = '/';
+    if (exist) {
+      cur = dir_open (dir_node);
+    }
+    else {
+      fail = true;
+      break;
+    }
+    if (!isdash)
+      break;
+    else
+      off = end + 1;
+    // printf("--- >%d)\n", inode_get_inumber (dir_get_inode(cur)));
+  }
+  if (!fail) {
+    dir_close (old);
+    thread_current ()->dir = cur;
+  } 
+  else {
+    if (cur != NULL)
+      dir_close (cur);
+    thread_current ()->dir = old;
+  }
+  free (dir);
+
+  return !fail;
+}
+
+bool 
+fsutil_mkdir (const char *dir_name)
+{
+  if (!dir_name[0])
+    return false;
+  // printf("-----faq: %s\n", dir);
+  int len = strlen (dir_name);
+  char *dir = malloc ( (len + 1) * sizeof (char) );
+
+  for (int i = 0; dir_name[i]; i++)
+    dir[i] = dir_name[i];
+  dir[len] = '\0';
+
+  struct dir *old = dir_reopen( thread_current ()->dir );
+  // printf("Creating %s, current dir sector %d\n", dir, inode_get_inumber (dir_get_inode(old) ) );
+  int pos = -1;
+  for (int i = 0; dir[i]; i ++)
+    if (dir[i] == '/' && dir[i+1] != 0)
+      pos = i;
+
+  struct inode *inode;
+
+  if (pos == 0) {
+    fsutil_chdir("/");
+  }
+  else if (pos > 0) {
+    dir[pos] = 0;
+    // printf("change to %s\n", dir);
+    if (!fsutil_chdir(dir)) {
+      dir_close (thread_current ()->dir);
+      thread_current ()->dir = old;
+      free (dir);
+
+      return false;
+    }
+    else 
+      dir[pos] = '/';
+  }
+
+  if (dir_lookup (thread_current ()->dir, &dir[pos + 1], &inode)) {
+    thread_current ()->dir = old;
+    inode_close (inode);
+    free (dir);
+
+    return false;
+  } else {
+    block_sector_t sector;
+    if (!free_map_allocate (1, &sector) || !dir_create (sector, 1)) {
+      dir_close (thread_current ()->dir);
+      thread_current ()->dir = old;
+      free (dir);
+
+      return false;
+    }
+    // trim last /
+    for (int i = pos + 1; dir[i]; i++)
+      if (dir[i] == '/') {
+        ASSERT (dir[i+1] == 0);
+        dir[i] = 0;
+        break;
+      }
+    
+    // Check max-length
+    if (strlen (dir + pos + 1) > NAME_MAX) {
+      free (dir);
+      return false;
+    }
+
+    struct dir *cur = thread_current ()->dir, *new_dir;
+    // Add new dir to its parent
+    ASSERT (cur != NULL);
+
+    ASSERT (dir_add (cur, &dir[pos+1], sector) );
+    // In new dir add ".." pointing tat its parent
+    ASSERT (dir_lookup (cur, &dir[pos + 1], &inode) );
+    new_dir = dir_open (inode);
+
+    // printf("creation ok: %d-->(%s %d)\n",inode_get_inumber (dir_get_inode(cur)), &dir[pos + 1], inode_get_inumber (inode) );
+    // char faq[16]  ="no";
+    // if ( inode_get_inumber (dir_get_inode(cur)) == 256 ) {
+    //   if (dir_readdir (cur, faq))
+    //   printf("#########  %s\n", faq);
+    //   if(dir_readdir (cur, faq))
+    //     printf("#########  %s\n", faq);
+    // }
+    ASSERT( dir_add (new_dir, ".", inode_get_inumber (dir_get_inode(new_dir)) ));
+    ASSERT( dir_add (new_dir, "..", inode_get_inumber (dir_get_inode(cur)) ));
+
+    // printf("save %d, denied? %d\n", inode_get_inumber (dir_get_inode(new_dir)) , is_dir_denied (new_dir) );
+
+    dir_close ( cur );
+    thread_current ()->dir = old;
+    dir_close (new_dir);
+    free (dir);
+    // printf("finished, sector %d\n", inode_get_inumber (dir_get_inode(old) ));
+
+    return true;
+  }
+
+}
+
+struct dir *fsutil_file_chdir (const char *file_path, char *file_name)
+{
+  ASSERT (file_path[0]);
+
+  int len = strlen (file_path);
+  char *dir = malloc ( (len + 1) * sizeof (char) );
+
+  for (int i = 0; file_path[i]; i++)
+    dir[i] = file_path[i];
+  dir[len] = '\0';
+
+  // printf("creating predir %s\n", dir);
+  struct dir *old = dir_reopen( thread_current ()->dir );
+
+  int pos = -1;
+  for (int i = 0; dir[i]; i ++)
+    if (dir[i] == '/' && dir[i+1] != 0)
+      pos = i;
+
+  if (strlen (dir + pos + 1) > NAME_MAX) {
+    free (dir);
+
+    return NULL;
+  }
+  
+  if (pos == -1) {
+    // dir_close (old);
+    int i;
+    for (i = 0; dir[i]; i ++)
+      file_name[i] = dir[i];
+    file_name[i] = 0;
+
+    free (dir);
+
+    return old;
+  }
+
+
+  dir[pos+1] = 0;
+
+  if (fsutil_chdir(dir) ) {
+    dir[pos+1] = file_path[pos+1];
+    dir[pos] = 0;
+    struct dir *cur = thread_current ()->dir;
+    thread_current ()->dir = old;
+    int i;
+    for (i = pos + 1; dir[i]; i ++)
+      file_name[i-pos-1] = dir[i];
+    file_name[i-pos-1] = '\0';
+    free (dir);
+
+    return cur;
+  }
+  else {
+    dir_close (old);
+    free (dir);
+
+    return NULL;
+  }
+}
+
+// pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/filesys/base/syn-remove -a syn-remove --swap-size=4 -- -q  -f run syn-remove

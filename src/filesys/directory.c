@@ -26,8 +26,9 @@ struct dir_entry
 bool
 dir_create (block_sector_t sector, size_t entry_cnt)
 {
-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
+  return inode_create (sector, entry_cnt * sizeof (struct dir_entry), MODE_DIR);
 }
+
 
 /* Opens and returns the directory for the given INODE, of which
    it takes ownership.  Returns a null pointer on failure. */
@@ -172,6 +173,7 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
   e.in_use = true;
   strlcpy (e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
+
   success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
 
  done:
@@ -200,6 +202,43 @@ dir_remove (struct dir *dir, const char *name)
   inode = inode_open (e.inode_sector);
   if (inode == NULL)
     goto done;
+  
+  // If name is a directory, check if it's empty
+  if ( inode_get_mode (inode) & MODE_DIR)
+  {
+    // printf("it's dir\n");
+    char buffer[NAME_MAX + 1];
+    struct dir *tmp = dir_open ( inode_reopen (inode) );
+    int cnt = 0;
+    while (dir_readdir (tmp, buffer))
+      if ( strcmp (buffer, "." ) && strcmp(buffer, "..") )
+        cnt++;
+    if (cnt > 0) {
+      dir_close (tmp);
+      goto done;
+    }
+    else {
+      // delete ""..", if it exists.
+      struct dir_entry de;
+      off_t tmp_ofs;
+      if ( lookup (tmp, ".", &de, &tmp_ofs) ) {
+        de.in_use = false;
+        if (inode_write_at (inode, &de, sizeof de, tmp_ofs) != sizeof e ) {
+          dir_close (tmp);
+          goto done;
+        }
+        // printf(". is removed for %s\n", name);
+      }
+      if ( lookup (tmp, "..", &de, &tmp_ofs) ) {
+        de.in_use = false;
+        dir_close (tmp);
+        if (inode_write_at (inode, &de, sizeof de, tmp_ofs) != sizeof e )
+          goto done;
+        // printf(".. is removed for %s\n", name);
+      }
+      inode_deny_write (inode);
+    }
+  }
 
   /* Erase directory entry. */
   e.in_use = false;
@@ -226,6 +265,29 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
     {
       dir->pos += sizeof e;
+      if (e.in_use)
+        {
+          strlcpy (name, e.name, NAME_MAX + 1);
+          return true;
+        } 
+    }
+  return false;
+}
+
+/* Reads the next directory entry in DIR represented by a file and stores 
+   the name in NAME.  Returns true if successful, false if the directory
+   contains no more entries. */
+bool
+file_readdir (struct file *file, char name[NAME_MAX + 1])
+{
+  struct dir_entry e;
+  /* Skip ".." */
+  if (file->pos == 0)
+    file->pos += 2 * (sizeof e);
+
+  while (inode_read_at (file->inode, &e, sizeof e, file->pos) == sizeof e) 
+    {
+      file->pos += sizeof e;
       if (e.in_use)
         {
           strlcpy (name, e.name, NAME_MAX + 1);

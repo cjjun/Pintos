@@ -86,6 +86,10 @@ file_read_at (struct file *file, void *buffer, off_t size, off_t file_ofs)
 off_t
 file_write (struct file *file, const void *buffer, off_t size) 
 {
+  // Check if file is directory
+  if ( inode_get_mode (file->inode) & MODE_DIR )
+    return -1;
+  // Normal write
   off_t bytes_written = inode_write_at (file->inode, buffer, size, file->pos);
   file->pos += bytes_written;
   return bytes_written;
@@ -102,6 +106,7 @@ off_t
 file_write_at (struct file *file, const void *buffer, off_t size,
                off_t file_ofs) 
 {
+  // printf("%p %d\n", file, file_ofs);
   return inode_write_at (file->inode, buffer, size, file_ofs);
 }
 

@@ -18,6 +18,8 @@
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
+#include "filesys/fsutil.h"
+#include "filesys/directory.h"
 
 typedef void syscall_func (struct intr_frame* UNUSED);
 
@@ -96,7 +98,6 @@ syscall_handler (struct intr_frame *f UNUSED)
   if(code < 0 || code >= SYS_MAX_CALL){
     system_exit (-1);
   }
-
   /* Record the original esp*/
   struct thread *cur = thread_current();
   bool first_visit = false;
@@ -183,7 +184,7 @@ system_exit (int exit_code){
     release_filesys_lock ();
     free (mmap_ptr);
   }
-
+  // printf("????\n");
   thread_exit();
 }
  
@@ -617,6 +618,9 @@ sys_chdir(struct intr_frame *f UNUSED)
   char *dir;
   check_ptr (f->esp + 4);
   mem_scanf (f->esp + 4, &dir, sizeof(dir));
+  check_buffer (dir, true);
+
+  f->eax = fsutil_chdir (dir);
 }
 
 /* Prototype
@@ -631,6 +635,9 @@ sys_mkdir(struct intr_frame *f UNUSED)
   char *dir;
   check_ptr (f->esp + 4);
   mem_scanf (f->esp + 4, &dir, sizeof(dir));
+  check_buffer (dir, true);
+  // printf("-----dir name: %s\n", dir);
+  f->eax = fsutil_mkdir (dir);
 }
 
 /* Prototype
@@ -647,6 +654,12 @@ sys_readdir(struct intr_frame *f UNUSED)
   check_ptr (f->esp + 8);
   mem_scanf (f->esp + 4, &fd, sizeof(fd));
   mem_scanf (f->esp + 8, &name, sizeof(name));
+
+  struct file *file_ptr = find_by_fd(fd);
+  if (file_ptr == NULL || (inode_get_mode (file_ptr->inode) & MODE_DIR) == 0 )
+    system_exit (-1);
+  
+  f->eax = file_readdir (file_ptr, name);
 }
 
 /* Prototype
@@ -661,6 +674,12 @@ sys_isdir(struct intr_frame *f UNUSED)
   int fd;
   check_ptr (f->esp + 4);
   mem_scanf (f->esp + 4, &fd, sizeof(fd));
+
+  struct file *file_ptr = find_by_fd(fd);
+  if (file_ptr == NULL)
+    system_exit (-1);
+  f->eax = ( inode_get_mode (file_ptr->inode) & MODE_DIR ) > 0;
+  
 }
 
 /* Prototype
@@ -675,6 +694,11 @@ sys_inumber(struct intr_frame *f UNUSED)
   int fd;
   check_ptr (f->esp + 4);
   mem_scanf (f->esp + 4, &fd, sizeof(fd));
+
+  struct file *file_ptr = find_by_fd(fd);
+  if (file_ptr == NULL)
+    system_exit (-1);
+  f->eax = inode_get_inumber (file_ptr->inode);
 }
 
 
