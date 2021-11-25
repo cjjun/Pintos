@@ -98,8 +98,9 @@ start_process (void *file_name_)
   }
   palloc_free_page (file_name);
   /* If load failed, quit. */
-  if (!success) 
-    system_exit (-1);
+  if (!success) {
+    thread_exit ();
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -371,7 +372,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  // file_close (file);
   thread_current()->hold_file = file;
 
   return success;
