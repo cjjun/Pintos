@@ -18,6 +18,7 @@ struct hash hash_page_table;
 static const int mod = 1000000007;
 /* Guard for hash_page_table */
 struct lock lock;
+struct lock alloc_lock;
 
 /*
     Define important hash table functions
@@ -41,6 +42,7 @@ static bool less_func (const struct hash_elem *a, const struct hash_elem *b, voi
 and initialize the hash table */
 void init_hash_spt (void) {
     lock_init (&lock);
+    lock_init (&alloc_lock);
     hash_init (&hash_page_table, hash_func, less_func, NULL);
 }
 
@@ -63,7 +65,7 @@ void load_from_swap (uint32_t *pte) {
     block_sector_t sector_idx = table->swap_sector;
 
     swap_out (kpage, sector_idx, PGSIZE);
-    // printf("%p load from sector %d, %d\n", pte, sector_idx, hash_page (kpage));
+    // printf("%p load from sector %d, %d\n", *pte, sector_idx, hash_page (kpage));
 
     pte_set_swap (pte, false);
 }
@@ -93,12 +95,12 @@ bool load_from_filesys (uint32_t *pte) {
     void *kpage = pte_to_kpage (pte);
     memset (kpage, 0, PGSIZE);
 
-    acquire_filesys_lock();
+    // acquire_filesys_lock();
     if ( (uint32_t)file_read (file_ptr, kpage, page_read_bytes) != page_read_bytes ) {
-        release_filesys_lock ();
+        // release_filesys_lock ();
         return false;
     }
-    release_filesys_lock ();
+    // release_filesys_lock ();
 
     return true;
 }
@@ -144,12 +146,12 @@ bool page_dirty_write (uint32_t *pte) {
         return false;
     /* Page is present */
     if (pte_is_present (pte)) {
-        acquire_filesys_lock ();
+        // acquire_filesys_lock ();
         off_t write_bytes = table->read_bytes;
 
         void *kpage = pte_to_kpage (pte);
         write_bytes = write_bytes == file_write_at (file, kpage, write_bytes, offset );
-        release_filesys_lock ();
+        // release_filesys_lock ();
         if (write_bytes > 0)
             return true;
     }
@@ -183,7 +185,9 @@ uint32_t *get_virtual_page (void *upage, bool writable) {
     table->pte = pte;
     table->read_bytes = 0;
 
+    lock_acquire (&lock);
     hash_insert (&hash_page_table, &table->elem);
+    lock_release (&lock);
     return pte;
 }
 
@@ -221,7 +225,7 @@ bool page_virtual_free (uint32_t *pte) {
         return false;
     ASSERT (pte_is_valid (pte));
     struct sup_page_table *table = lookup_spt (pte);
-    ASSERT (table);
+    ASSERT (table != NULL);
 
     if (pte_is_present (pte)) {
         if (table->file_ptr != NULL) {
@@ -247,7 +251,7 @@ bool page_virtual_free (uint32_t *pte) {
 void page_absent_action (void *upage) {
 
     ASSERT (pg_ofs (upage) == 0);
-    
+    lock_acquire (&alloc_lock);
     uint32_t *pte = uaddr_to_pte (upage);
     ASSERT (pte && pte_is_valid (pte));
     /* Case 0: present*/
@@ -255,9 +259,11 @@ void page_absent_action (void *upage) {
         return;
     /* Case 1: swapped */
     if (pte_is_swapped (pte)) {
+        // printf("ass case 1 %p--%p\n", pte, *pte);
         load_from_swap (pte);
     }
     else {
+        // printf("ass case 2 %p--%p\n", pte, *pte);
         install_frame (pte);
         if (pte_is_mmapped (pte)) {
             if (!load_from_filesys (pte) )
@@ -265,6 +271,7 @@ void page_absent_action (void *upage) {
             pte_set_mmap (pte, false);
         }
     }
+    lock_release (&alloc_lock);
 }
 
 /* Looks for supplementary page table by pte from hash table. */

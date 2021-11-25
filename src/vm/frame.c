@@ -57,7 +57,7 @@ uint32_t *frame_to_pte (void *frame_addr) {
 }
 /*
     Implementation of the clock algorithm.
-    1. If frame table is NULL, meaning a available frame, assign it.
+    1. If frame table is NULL, meaning an available frame, assign it.
     2. If frame is dirty, do operations, then unmark dirty, skip.
     3, If frame is accessed, unmark access flag, skip.
     4. Frame is considered idle, swap out content in the 
@@ -99,6 +99,7 @@ void install_frame (uint32_t *target_pte) {
             } else if (!pte_is_swapped (pte)) {
                 break;
             } else {
+                printf("(%d)----old = %p , target = %p\n", thread_current()->tid, *pte, *target_pte);
                 NOT_REACHED ();
             }
         }
@@ -106,14 +107,19 @@ void install_frame (uint32_t *target_pte) {
         if (pte != NULL) {
             ASSERT ( !pte_is_swapped (pte) );
             ASSERT( store_in_swap (pte) );
+            // printf("%d---store %p in swap\n", thread_current()->tid,pte);
         }
     }
-
+// ----old = 0x3fd08f , target = 0x8e
 
     /* Install the new frame*/
     uaddr = base + clock_hand * PGSIZE;
     pte_install_frame (target_pte, uaddr);
     frame_table[clock_hand] = target_pte;
+    // if (pte_is_swapped(target_pte)) {
+    //     printf("----old (%p) = %p , target = %p\n", pte, *pte, *target_pte);
+    //     PANIC("ass");
+    // }
     clock_hand = ( clock_hand + 1 ) % frame_num;
     lock_release (&frame_lock);
     
@@ -138,3 +144,6 @@ void pin_frame (void *stack, void *code) {
     pin_stack_pte = uaddr_to_pte (stack);
     pin_code_pte =  uaddr_to_pte (code);
 }
+
+
+// pintos -v -k -T 60 --bochs  --filesys-size=2 -p tests/vm/page-parallel -a page-parallel -p tests/vm/child-linear -a child-linear --swap-size=4 -- -q  -f run page-parallel

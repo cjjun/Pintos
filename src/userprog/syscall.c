@@ -25,7 +25,7 @@ typedef void syscall_func (struct intr_frame* UNUSED);
 
 /* Local variables */
 syscall_func *sys_func[20];
-struct lock filesys_lock;
+struct lock filesys_lock, stdin_lock, stdout_lock;
 int fd_cnt = 5;
 
 static void syscall_handler (struct intr_frame *);
@@ -86,7 +86,8 @@ syscall_init (void)
   sys_func[SYS_INUMBER] = sys_inumber;
 
   lock_init (&filesys_lock);
-
+  lock_init (&stdin_lock);
+  lock_init (&stdout_lock);
 }
 
 static void
@@ -373,10 +374,10 @@ sys_read (struct intr_frame *f UNUSED)
   check_buffer (buffer, true);
   check_ptr (buffer);
   if (fd == 0){
-    acquire_filesys_lock ();
+    lock_acquire (&stdin_lock);
     for(unsigned i = 0; i < size; ++i)
       buffer[i] = input_getc();
-    release_filesys_lock ();
+    lock_release (&stdin_lock);
     buffer[size] = 0;
     f->eax = size;
   } else {
@@ -386,9 +387,9 @@ sys_read (struct intr_frame *f UNUSED)
       return;
     }
 
-    acquire_filesys_lock ();
+    // acquire_filesys_lock ();
     f->eax = file_read (file_ptr, buffer, size);
-    release_filesys_lock ();
+    // release_filesys_lock ();
   }
   // printf("ok2\n");
 }
@@ -427,9 +428,9 @@ sys_write (struct intr_frame *f UNUSED)
 
   if( fd == 1 ){
     size = size < 1000? size:1000;
-    acquire_filesys_lock ();
+    lock_acquire (&stdout_lock);
     putbuf(buffer, size);
-    release_filesys_lock ();
+    lock_release (&stdout_lock);
     f->eax = size;
   } else {
     struct file *file_ptr = find_by_fd(fd);
@@ -437,9 +438,9 @@ sys_write (struct intr_frame *f UNUSED)
     if (file_ptr == NULL)
       system_exit (-1);
 
-    acquire_filesys_lock ();
+    // acquire_filesys_lock ();
     f->eax = file_write (file_ptr, buffer, size);
-    release_filesys_lock ();
+    // release_filesys_lock ();
   }
 }
 
